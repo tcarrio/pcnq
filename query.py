@@ -2,16 +2,16 @@
 import os
 import string
 import subprocess as sp
-#io thread
-from collections import deque
-import threading
+import sys
 
 class PC:
-	def __init__(self):
-		self=self
-	def __init__(self,name):
+	def __init__(self,name,sn='',ip='',status='',user='',location=''):
 		self.name=name
 		self.sn=name[1:]
+		self.ip=ip
+		self.status=status
+		self.user=user
+		self.location=location
 	def get_name(self):
 		return self.name
 	def get_sn(self):
@@ -22,6 +22,8 @@ class PC:
 		return self.status
 	def get_user(self):
 		return self.user
+	def get_location(self):
+		return self.location
 	def set_name(self,name):
 		self.name=name
 	def set_sn(self,sn):
@@ -35,6 +37,8 @@ class PC:
 		self.status=status
 	def set_user(self,user):
 		self.user=user
+	def set_location(self,location):
+		self.location=location
 	def get_all(self):
 		all = []
 		all.append(self.name)
@@ -42,16 +46,30 @@ class PC:
 		all.append(self.ip)
 		all.append(self.status)
 		all.append(self.user)
+		all.append(self.location)
 		return all
 
-searching = 0
-pc_queue = deque([])
+class LocationMapper:
+	def __init__(self,ip_addr):
+		self.ip=ip_addr
+		self.location_mapper=dict()
+		with open('loclist.csv') as f:
+			for l in f.readlines():
+				map = l.split(';')
+				self.location_mapper[map[0]]=map[1]
+			f.close()
+	def get_location(self):
+		for key in self.location_mapper:
+			if key in self.ip:
+				return self.location_mapper[key].strip()
 
-def io_thread():
-	t = threading.Thread(target=stack_listener)
-	t.start()
+pc_queue = []
 
-def stack_listener():
+def main():
+	all_titles=['Computername','Serialnumber',
+		'IP Addr','Status','User','Location']
+	pc_queue.append(";".join(all_titles)+'\n')
+	
 	file_name='pc_network_info.csv'
 	folder_name='script_output'
 	try:
@@ -60,24 +78,9 @@ def stack_listener():
 		print('Output folder already exists')
 	output_folder=os.path.join(os.getcwd(),folder_name)
 
-	all_titles=['Computername','Serialnumber',
-		'IP Addr','Status','User']
-
-	with open(os.path.join(output_folder,file_name),'w') as f:
- 		f.write(";".join(all_titles)+'\n')
- 		searching=1
-		while(searching):
-			if len(pc_queue)>0:
-				l_out=";".join(pc_queue.popleft().get_all())
-				f.write(l_out+'\n')
-				print(l_out)
-		f.close()
-		return
-
-
-def main_thread():
 	pcs = []
-	with open('pclist.csv') as pc_csv:
+
+	with open(os.path.join(os.getcwd(),'pclist.csv'),'r') as pc_csv:
 		for item in pc_csv:
 			pcs.append(PC(item.strip())) # add string of name
 
@@ -85,15 +88,23 @@ def main_thread():
 		nfo=query_status_by_pc(pc.get_name())
 		if nfo['status']=='Online':
 			user=query_user_by_pc(pc.get_name())
+			loc=LocationMapper(nfo['ip']).get_location()
 		else:
 			user=''
-		pc.set_sn(pc.get_name())
+			loc=''
 		pc.set_ip(nfo['ip'])
 		pc.set_status(nfo['status'])
 		pc.set_user(user)
-		pc_queue.append(pc)
+		pc.set_location(loc)
+		pcstring=";".join(pc.get_all())+'\n'
+		pc_queue.append(pcstring)
 
-	searching = 0
+	try:
+		attempt_save(os.path.join(output_folder,file_name))
+	except IOError:
+		attempt_save(os.path.join(output_folder,'tmp_'+file_name))
+
+	sys.exit()
 
 def query_status_by_pc(pcname):
 	stat_dict = dict()
@@ -113,22 +124,36 @@ def query_status_by_pc(pcname):
 
 def query_user_by_pc(pcname):
 	user_list = []
-	proc=sp.Popen(['psloggedon','\\\\'+pcname],shell=False,
+	proc=sp.Popen(['psloggedon','\\\\'+pcname],shell=True,
 		stdout=sp.PIPE, stderr=sp.PIPE)
-	#ps_out=sp.check_output(['psloggedon','\\\\'+pcname])
+	proc.wait()
+	proc.wait()
 	ps_out, ps_err = proc.communicate()
-	print('OUT:'+ps_out)
-	print('ERR:'+ps_err)
-	for line in ps_out:
-		if 'BAD\\' in line and not 'eRuntime' in line:
-			user_list.append(line[string.find(line,'\\'):])
+	for line in ps_out.split('\n'):
+		if 'BAD' in line and not 'eRuntime' in line:
+			username=line[string.find(line,'\\')+1:].strip('\n')
+			print('User: '+username)
+			user_list.append(username)
 	if len(user_list)>1:
-		return ",".join(user_list)
+		return ",".join(user_list)[:-1]
 	elif len(user_list)==1:
-		return user_list[0]
+		return user_list[0][:-1]
 	else:
 		return ''
 
+def attempt_save(fname,attempts=0):
+	try:
+		with open(fname,'w') as f:
+	  		f.writelines(pc_queue)
+	 		f.close()
+	except IOError:
+		if attempts>3:
+			raise IOError('Permission denied')
+		else:
+			print('File could not be saved. Please check to make'
+				+' sure that the file % is not open.', fname)
+			time.sleep(5)
+			attempt_save(fname,attempts+1)
+
 if __name__ == "__main__":
-	io_thread()
-	main_thread() 
+	main() 
